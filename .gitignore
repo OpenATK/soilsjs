@@ -1,0 +1,23 @@
+node_modules
+package.lock
+config.default.js
+
+*.log
+.DS_Store
+
+# TypeScript
+dist
+*.tsbuildinfo
+
+# Ignore act stuff?
+.actrc
+act/
+
+# yarn 2 stuff
+.yarn/*
+!.yarn/releases
+!.yarn/plugins
+!.yarn/versions
+.pnp.*
+# ignore sdk stuff
+.vim

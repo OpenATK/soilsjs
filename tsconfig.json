@@ -1,0 +1,23 @@
+{
+  "extends": "@tsconfig/node16",
+  "compilerOptions": {
+    "allowJs": true,
+    "removeComments": true,
+    "importHelpers": true,
+    "strict": true,
+    "importsNotUsedAsValues": "error",
+    "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitThis": true,
+    "noImplicitAny": false,
+    "noImplicitOverride": true,
+    "sourceMap": true,
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "include": ["src"],
+  "exclude": [
+    "test/**/*"
+  ]
+}
