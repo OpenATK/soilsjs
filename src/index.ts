@@ -73,7 +73,6 @@ async function fromWkt(wkt, config?) {
       'FORMAT': 'JSON+COLUMNNAME+METADATA'
     }
   })
-  console.log(response);
   let table = response.data.Table;
   let result = parseQueryResult(table, 'mukey');
   let mukeys = result.objData;
