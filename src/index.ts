@@ -5,9 +5,9 @@ const axios = require('axios');
 const _ = require('lodash');
 const debug = require('debug');
 
-const info = debug('ssurgo:info');
-const trace = debug('ssurgo:trace');
-const error = debug('ssurgo:error');
+const info = debug('soilsjs:info');
+const trace = debug('soilsjs:trace');
+const error = debug('soilsjs:error');
 
 let defaultConfig = {
   mupolygon: {},
@@ -57,21 +57,23 @@ async function fromCounty(state, county, config?) {
   return fromAreaSymbol(areaSymbol, config);
 }
 
-async function fromWkt(Wkt, config?) {
+// The WKT string itself won't work, it must be surrounded by single quotes, e.g., 'x'
+async function fromWkt(wkt, config?) {
   config = config || defaultConfig;
-  Wkt = `'polygon((-86.7302676178553 40.4031488400723, -86.7302713805371 40.4032666167283, -86.7303980022839 40.4035503896778, -86.7303774411828 40.4036807296437, -86.7303165534701 40.4037264832885, -86.7301845989508 40.4037311353392, -86.7299436537218 40.4036649894988, -86.7298337880099 40.403619241858, -86.7296261195992 40.4034443198906, -86.7295670365752 40.403375396507, -86.7295487963104 40.4033229296444, -86.7295891651778 40.4032971947975, -86.7296751509818 40.4031779428205, -86.7297926075345 40.4030645919529, -86.7299309407755 40.402974302328, -86.7300830258591 40.4029800998273, -86.7301991374799 40.40306039039, -86.7302676178553 40.4031488400723))'`
-  trace(`Using geometry ${Wkt}`);
-  trace(`Generated query: SELECT * FROM SDA_Get_Mukey_from_intersection_with_WktWgs84(${Wkt})`) 
+  wkt = `'${wkt}'`; // HERE IS THE MODIFICATION NECESSARY FOR THEIR API
+  let QUERY = `SELECT * FROM SDA_Get_Mukey_from_intersection_with_WktWgs84(${wkt})`;
+  trace(`Generated query: ${QUERY}`) 
   let response = await axios({
     method: "post", 
     url: "https://sdmdataaccess.sc.egov.usda.gov/Tabular/post.rest?",
     data: {
       'SERVICE': 'query',
       'REQUEST': 'query',
-      'QUERY': `SELECT * FROM SDA_Get_Mukey_from_intersection_with_WktWgs84(${Wkt})`, 
+      QUERY, 
       'FORMAT': 'JSON+COLUMNNAME+METADATA'
     }
   })
+  console.log(response);
   let table = response.data.Table;
   let result = parseQueryResult(table, 'mukey');
   let mukeys = result.objData;
@@ -86,7 +88,7 @@ async function fromWkt(Wkt, config?) {
       method: "post", 
       url: "https://sdmdataaccess.sc.egov.usda.gov/Tabular/post.rest?",
       data: {
-        QUERY: `SELECT * FROM SDA_Get_Mupolygonkey_from_intersection_with_WktWgs84(${Wkt})`, 
+        QUERY: `SELECT * FROM SDA_Get_Mupolygonkey_from_intersection_with_WktWgs84(${wkt})`, 
         //QUERY: `SELECT * from mupolygon where mupolygonkey IN (${Object.keys(mupolygonkeys).join(',')})`,
         FORMAT: 'JSON+COLUMNNAME'
       }
@@ -171,7 +173,7 @@ async function fromAreaSymbol(areaSymbol, config) {
   return obj;
 }
 
-async function recursiveGetSubTables(obj, config, path) {
+async function recursiveGetSubTables(obj, config, path, reindex?) {
   trace(`Retreiving data via recursiveGetSubTables...path: ${path}, keys: ${Object.keys(obj)}`);
   // Get the config and data for this level;
   let newConfig = pointer.get(config, path);
@@ -179,10 +181,11 @@ async function recursiveGetSubTables(obj, config, path) {
   let parentKey = pieces[pieces.length-1];
   let parentData = pointer.get(obj, `/${parentKey}`)
   // Get the keys in the config at this level; these are the tables to retreive
+  reindex = reindex || {};
   for (const key in newConfig) {
     // Retreive the data for those tables
-    obj[key] = await getSubTable(parentData, key);
-    await recursiveGetSubTables(obj, config, `${path}/${key}`)
+    obj[key] = await getSubTable(parentData, key, reindex[key]);
+    await recursiveGetSubTables(obj, config, `${path}/${key}`, reindex)
   }
 }
 
@@ -203,7 +206,7 @@ async function fetchDataFromMukeys(mukeys, config) {
   obj.mapunit = result.objData;
 
   // Start at mapunits and traverse + retrieve any desired tables
-  await recursiveGetSubTables(obj, config, '/mapunit')
+  await recursiveGetSubTables(obj, config.data, '/mapunit', config.reindex)
 
   // Prune any unrequested data
   /*
@@ -236,13 +239,15 @@ function recursiveFind(obj, findKey, path) {
 }
 
 function nestData({parent, data, childKeyName, parentKeyName, childTableName, childIndexKey}) {
+  info(`Nesting data. childKeyName: ${childKeyName}, parentKeyName: ${parentKeyName}, childTableName: [${childTableName}] childIndexKey: ${childIndexKey}`)
   //@ts-ignore
   data.forEach((item) => {
     let {[childKeyName]: cKey, [parentKeyName]: pKey} = item;
     parent[pKey][childTableName] = parent[pKey][childTableName] || {};
 
-    childIndexKey = childIndexKey || cKey;
+    childIndexKey = childIndexKey || childKeyName;
     let childIndexValue = item[childIndexKey];
+    trace(`Nesting childIndexValue [${childIndexValue}] childIndexKey [${childIndexKey}]`)
     parent[pKey][childTableName][childIndexValue] = cKey; 
   })
 }
