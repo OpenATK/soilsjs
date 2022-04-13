@@ -21,7 +21,7 @@ let defaultConfig = {
 // For whatever reason, the soil data mart web service frequently errors with ECONNRESET 
 ar(axios, {retries: 3, retryCondition: function(error) {
   if (error.code === 'ECONNRESET') {
-    console.log('ECONNRESET Error, Retrying...');
+    error('ECONNRESET Error, Retrying...');
     return error.code === 'ECONNRESET';
   } else return false;
 }})
@@ -205,7 +205,7 @@ async function fetchDataFromMukeys(mukeys, config) {
   obj.mapunit = result.objData;
 
   // Start at mapunits and traverse + retrieve any desired tables
-  await recursiveGetSubTables(obj, config.data, '/mapunit', config.reindex)
+  await recursiveGetSubTables(obj, config, '/mapunit', config.reindex)
 
   // Prune any unrequested data
   /*
@@ -436,7 +436,7 @@ async function getHorizonData(components) {
   try {
     response = await axios({method, url, data});
   } catch (err) {
-    console.log(err);
+    error(err);
   }
   let table = response.data.Table;
   let result = parseQueryResult(table, 'chkey')
