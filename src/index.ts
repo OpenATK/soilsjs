@@ -83,20 +83,42 @@ async function fromWkt(wkt, config?) {
   if (!config || !(config!.mupolygon === false)) {
     obj.mupolygon = {};
     // Get polygon data
-    let resp = await axios({
+    let table = await axios({
       method: "post", 
       url: "https://sdmdataaccess.sc.egov.usda.gov/Tabular/post.rest?",
       data: {
         QUERY: `SELECT * FROM SDA_Get_Mupolygonkey_from_intersection_with_WktWgs84(${wkt})`, 
-        //QUERY: `SELECT * from mupolygon where mupolygonkey IN (${Object.keys(mupolygonkeys).join(',')})`,
         FORMAT: 'JSON+COLUMNNAME'
       }
     })
-    let table = resp.data.Table;
+    .then(r => r.data.Table)
     let result = parseQueryResult(table, 'mupolygonkey');
     result.arrayData.forEach(p => {
       obj.mupolygon[p.mupolygonkey] = p;
     })
+
+    table = await axios({
+      method: "post", 
+      url: "https://sdmdataaccess.sc.egov.usda.gov/Tabular/post.rest?",
+      data: {
+        QUERY: `SELECT * from mupolygon where mupolygonkey IN (${Object.keys(obj.mupolygon).join(',')})`,
+        FORMAT: 'JSON+COLUMNNAME'
+      }
+    })
+    .then(r => r.data.Table)
+    .catch(async (err) => {
+      if (err.response.status === 500) {
+        if (typeof err.response.data === 'string' && err.response.data.includes("Error during serialization or deserialization using the JSON JavaScriptSerializer. The length of the string exceeds the value set on the maxJsonLength property")) {
+          let queryString = `SELECT * from mupolygon where mupolygonkey IN ()`;
+          return catchMaxJsonTwo(queryString, Object.keys(obj.mupolygon), []) 
+        }
+      }
+      error(err);
+      throw err;
+    })
+    result = parseQueryResult(table, 'mupolygonkey');
+    let objData = result.objData;
+    obj.mupolygon = objData;
   }
   return obj;
 }

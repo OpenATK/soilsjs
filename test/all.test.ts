@@ -6,13 +6,11 @@ let { fromWkt, fromCounty, query } = require('../dist/index');
 let testWkt = `polygon((-86.7302676178553 40.4031488400723, -86.7302713805371 40.4032666167283, -86.7303980022839 40.4035503896778, -86.7303774411828 40.4036807296437, -86.7303165534701 40.4037264832885, -86.7301845989508 40.4037311353392, -86.7299436537218 40.4036649894988, -86.7298337880099 40.403619241858, -86.7296261195992 40.4034443198906, -86.7295670365752 40.403375396507, -86.7295487963104 40.4033229296444, -86.7295891651778 40.4032971947975, -86.7296751509818 40.4031779428205, -86.7297926075345 40.4030645919529, -86.7299309407755 40.402974302328, -86.7300830258591 40.4029800998273, -86.7301991374799 40.40306039039, -86.7302676178553 40.4031488400723))`
 
 let config = {
-  data: {
-    mupolygon: {},
-    mapunit: {
-      component: {
-        comonth: {},
-        chorizon: {}
-      }
+  mupolygon: {},
+  mapunit: {
+    component: {
+      comonth: {},
+      chorizon: {}
     }
   }
 }
@@ -35,6 +33,7 @@ describe('Overall functional tests: all.test.js', function() {
   it(`Should retreive the data for a given wkt`, async () => {
     console.log({testWkt})
     let result = await fromWkt(testWkt, config);
+    console.log(result);
 
     expect(result).to.have.all.keys(...['mapunit', 'component', 'chorizon', 'comonth', 'mupolygon'])
   });
