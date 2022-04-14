@@ -1,6 +1,6 @@
 {
   "name": "soilsjs",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "A node module for accessing SSURGO soils data within the US",
   "main": "dist/index.js",
   "scripts": {
