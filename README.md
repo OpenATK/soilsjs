@@ -10,6 +10,11 @@ $ npm install soilsjs
 ```
 
 ## Usage
+Require the module:
+
+```js
+const soilsjs = require('soilsjs')
+```
 
 ### fromWkt
 Return the primary soil data tables for an input geometry in Well Known Text (WKT) format. Refer to other packages for translation from geojson or other formats into WKT.
