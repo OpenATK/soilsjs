@@ -1,6 +1,7 @@
-soisjs
+soilsjs
 
-A node module for accessing SSURGO soils data within the US
+A node module for accessing SSURGO soils data within the US.
+Retrieve USDA SSURGO soils data using the SQL-based Soil Data Access REST API.
 
 ## Installation
 
@@ -10,16 +11,58 @@ $ npm install soilsjs
 
 ## Usage
 
-Retrieve SSURGO soils data using the SQL-based Soil Data Access REST API.
-
-### Getting Started:
-Return the primary data soil data tables for an area of interest in WKT format. Refer to other packages to translate from geojson or other formats.
-
+### fromWkt
+Return the primary soil data tables for an input geometry in Well Known Text (WKT) format. Refer to other packages for translation from geojson or other formats into WKT.
 ```
 let wktStr = 'polygon((-86.7302676178553 40.4031488400723, -86.73027138053 71 40.4032666167283, -86.7303980022839 40.4035503896778, -86.7303774411828 40.4036807296437, -86.7303165534701 40.4037264832885, -86.7301845989508 40.4037311353392, -86.7299436537218 40.4036649894988, -86.7298337880099 40.403619241858, -86.7296261195992 40.4034443198906, -86.7295670365752 40.403375396507, -86.7295487963104 40.4033229296444, -86.7295891651778 40.4032971947975, -86.7296751509818 40.4031779428205, -86.7297926075345 40.4030645919529, -86.7299309407755 40.402974302328, -86.7300830258591 40.4029800998273, -86.7301991374799 40.40306039039, -86.7302676178553 40.4031488400723))';
 let soils = await soilsjs.fromWkt(wktStr);
 ```
-#### Output sample
+
+### fromCounty:
+Good for larger data queries. Generates a FIPS code-based AreaSymbol from county and state info.
+```
+let soils = await soilsjs.fromCounty("Tippecanoe","IN") // "abbreviate"
+```
+
+### Configure the data tables returned:
+Specify the set of data tables to request. Add a configuration object as the last argument of each supported method (fromWkt, fromCounty). 
+Refer to <https://sdmdataaccess.sc.egov.usda.gov/documents/TableRelationshipsDiagram.pdf> for a layout of the data tables.
+The configuration should be an object with nested tables rooted at `mapunit` consistent with the above diagram.
+
+```
+let config = {
+  mupolygon: {},
+  mapunit: {
+    component: {
+      comonth: {}, //Add the COMONTH data table
+      chorizon: {}
+    }                                                                           
+  }                                                                             
+}
+let soils = await soilsjs.fromWkt(wktStr, config) //optional second argument
+```
+Additional data tables will be returned as top level keys like the others. The default config is:
+```
+let config = {
+  mupolygon: {},
+  mapunit: {
+    component: {
+      chorizon: {}
+    }                                                                           
+  }                                                                             
+}
+```
+
+### Custom Query
+Send a custom query using the POST.Request web service.The following URL can be used to test queries:
+<https://sdmdataaccess.nrcs.usda.gov/Query.aspx>
+```
+let soils = await soilsjs.query("SELECT * from MUAOVERLAP where mukey IN (163833)");
+```
+
+### Sample Output
+There is a sample json output also included in the repo: <https://github.com/OpenATK/soilsjs/blob/master/sample-output.json>
+In short, it will return a mostly flat object listing the table names at the top level. Under each table, each entry object is keyed under its primary key:
 ```
 {
   mapunit: { // SSURGO table names
@@ -54,7 +97,4 @@ let soils = await soilsjs.fromWkt(wktStr);
 }
 ```
 
-
-                                                                           
-The following URL can be used to test queries:                             
-<https://sdmdataaccess.nrcs.usda.gov/Query.aspx>
+For additional SDM Data Access API details, see <https://sdmdataaccess.nrcs.usda.gov/WebServiceHelp.aspx>
