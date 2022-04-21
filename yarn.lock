@@ -1467,6 +1467,7 @@ __metadata:
     lodash: ^4.17.21
     mocha: ^9.2.1
     ts-node: ^10.5.0
+    turf-jsts: ^1.2.3
     typescript: ^4.5.5
     wicket: ^1.3.6
   languageName: unknown
@@ -1593,6 +1594,13 @@ __metadata:
     ts-node-transpile-only: dist/bin-transpile.js
     ts-script: dist/bin-script-deprecated.js
   checksum: 2a379e43f7478d0b79e1e63af91fe222d83857727957df4bd3bdf3c0a884de5097b12feb9bbf530074526b8874c0338b0e6328cf334f3a5e2c49c71e837273f7
+  languageName: node
+  linkType: hard
+
+"turf-jsts@npm:^1.2.3":
+  version: 1.2.3
+  resolution: "turf-jsts@npm:1.2.3"
+  checksum: 89238606b0d659069d5853f1d3ec4d95942c81e527fc48198206a7edf2d297f8d126cc228b969b0c99a1d6adef7aef570904b139167309face02d99f8e3f7856
   languageName: node
   linkType: hard
 

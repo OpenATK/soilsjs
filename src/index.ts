@@ -1,22 +1,20 @@
 const pointer = require('json-pointer');
+//const turf = require('@turf/turf');
 const fips = require('fips-county-codes');
 const ar = require('axios-retry');
 const axios = require('axios');
-const _ = require('lodash');
 const debug = require('debug');
 
 const info = debug('soilsjs:info');
 const trace = debug('soilsjs:trace');
 const error = debug('soilsjs:error');
 
-let defaultConfig = {
-  mupolygon: {},
-  mapunit: {
-    component: {
-      chorizon: {}
-    }
-  }
-}
+let defaultConfig = [
+  'mupolygon',
+  'mapunit',
+  'component',
+  'chorizon'
+];
 
 // For whatever reason, the soil data mart web service frequently errors with ECONNRESET 
 ar(axios, {retries: 3, retryCondition: function(error) {
@@ -110,7 +108,7 @@ async function fromWkt(wkt, config?) {
       if (err.response.status === 500) {
         if (typeof err.response.data === 'string' && err.response.data.includes("Error during serialization or deserialization using the JSON JavaScriptSerializer. The length of the string exceeds the value set on the maxJsonLength property")) {
           let queryString = `SELECT * from mupolygon where mupolygonkey IN ()`;
-          return catchMaxJsonTwo(queryString, Object.keys(obj.mupolygon), []) 
+          return catchMaxJson(queryString, Object.keys(obj.mupolygon), []) 
         }
       }
       error(err);
@@ -178,9 +176,8 @@ async function fromAreaSymbol(areaSymbol, config) {
     .catch(async (err) => {
       if (err.response.status === 500) {
         if (typeof err.response.data === 'string' && err.response.data.includes("Error during serialization or deserialization using the JSON JavaScriptSerializer. The length of the string exceeds the value set on the maxJsonLength property")) {
-          //return catchMaxJson(err, Object.keys(mukeys), areaSymbol, obj)
           let queryString = `SELECT * from mupolygon where mukey IN () and areasymbol IN ('${areaSymbol}')`;
-          return catchMaxJsonTwo(queryString, Object.keys(mukeys), []) 
+          return catchMaxJson(queryString, Object.keys(mukeys), []) 
         }
       }
       error(err);
@@ -210,6 +207,22 @@ async function recursiveGetSubTables(obj, config, path, reindex?) {
   }
 }
 
+async function nonRecursiveGetSubTables(obj, config) {
+  //1. Find the path where this key occurs
+  //2. json pointer set it to empty obj {}
+  //3. Hand the compiled object off to recursiveGetSubTables
+
+  // Iterate over the list of tables in the config
+  let conf = {};
+  config.forEach((key) => {
+    // Retreive the data for those tables
+    let path = recursiveFind(tableTree, key.toUpperCase(), '');
+    path += `/${key.toUpperCase()}`;
+    pointer.set(conf, path.toLowerCase(), {})
+  })
+  await recursiveGetSubTables(obj, conf, `/mapunit`, config.reindex)
+}
+
 async function fetchDataFromMukeys(mukeys, config) {
   let obj : any = {};
 
@@ -227,19 +240,20 @@ async function fetchDataFromMukeys(mukeys, config) {
   obj.mapunit = result.objData;
 
   // Start at mapunits and traverse + retrieve any desired tables
-  await recursiveGetSubTables(obj, config, '/mapunit', config.reindex)
+  if (Array.isArray(config)) {
+    await nonRecursiveGetSubTables(obj, config)
+  } else if (typeof config === 'object' && !Buffer.isBuffer(config)) {
+    await recursiveGetSubTables(obj, config, `/mapunit`, config.reindex)
+  }
 
   // Prune any unrequested data
-  /*
-  if (config) {
+  if (config && config) {
     Object.keys(obj).forEach((key) => {
-      if (config[key]) {
-      } else {
+      if (!config.includes(key)) {
         delete obj[key]
       }
     })
   }
- */
   return obj;
 }
 
@@ -247,7 +261,7 @@ function recursiveFind(obj, findKey, path) {
   let result;
   for (const key in obj) {
     if (key === findKey) {
-      result = {path};
+      result = path;
       break;
     } else {
       if (typeof obj[key] === 'object' && Object.keys(obj[key]).length > 0) {
@@ -274,7 +288,7 @@ function nestData({parent, data, childKeyName, parentKeyName, childTableName, ch
 }
 
 function parentTableFromChildName(name) {
-  let {path} = recursiveFind(tableTree, name.toUpperCase(), '');
+  let path = recursiveFind(tableTree, name.toUpperCase(), '');
   if (!path) throw new Error(`Could not find parent table for ${name}`)
   let pieces = pointer.parse(path)
   let parentTable = pieces[pieces.length-1];
@@ -322,58 +336,7 @@ async function getSubTable(parentData, childTableName, childIndexKey?) {
   return objData;
 }
 
-// Make this generic to all queries
-async function catchMaxJson(err, mukeys, areaSymbol, obj) {
-  if (err.response.status === 500) {
-    if (typeof err.response.data === 'string' && err.response.data.includes("Error during serialization or deserialization using the JSON JavaScriptSerializer. The length of the string exceeds the value set on the maxJsonLength property")) {
-      info('Handling error with catchMaxJson. Dividing mukeys into smaller chunks.')
-      //1. Get the number of mukeys 
-      let increment = Math.floor(mukeys.length/4);
-      let remainder = mukeys.length%4;
-      // Divide into 4 groups
-      for (let i = 0; i < 5; i++) {
-        let start = ((mukeys.length-remainder)/4)*i;
-        let end = (((mukeys.length-remainder)/4)*i) + increment;
-        if (i === 4) {
-          if (remainder === 0) {
-            continue;
-          } else {
-            end = mukeys.length;
-          }
-        }
-        let keys = mukeys.slice(start, end)
-        trace(`Small increment using this query: SELECT * from mupolygon where mukey IN (${keys.join(',')}) and areasymbol IN ('${areaSymbol}')`);
-        obj = await axios({
-          method: "post", 
-          url: "https://sdmdataaccess.sc.egov.usda.gov/Tabular/post.rest?",
-          data: {
-            QUERY: `SELECT * from mupolygon where mukey IN (${keys.join(',')}) and areasymbol IN ('${areaSymbol}')`,
-            'FORMAT': 'JSON+COLUMNNAME'
-          }
-        // recursively repeat if it fails again
-        }).then((resp) => {
-          info(`Smaller increment succeeded:`, {increment, startingIndex:start, endingIndex: end})
-          let table = resp.data.Table;
-          let result = parseQueryResult(table, 'mupolygonkey');
-          result.arrayData.forEach(p => {
-            //keys.forEach(key => obj.mukeys[key] = key)
-            obj.mupolygon[p.mupolygonkey] = p;
-          })
-          return obj;
-        }).catch(async (er) => {
-          info(`Smaller increment failed:`, {increment, startingIndex:start, endingIndex: end})
-          error(er);
-          return catchMaxJson(er, keys, areaSymbol, obj) 
-        })
-      }
-      return obj;
-    }
-  }
-  info('Error not able to be handled by catchMaxJson')
-  throw err;
-}
-
-async function catchMaxJsonTwo(queryString, items, table) {
+async function catchMaxJson(queryString, items, table) {
   info('Handling error with catchMaxJson. Dividing items into smaller chunks.')
   //1. Get the number of items 
   let increment = Math.floor(items.length/4);
@@ -415,7 +378,7 @@ async function catchMaxJsonTwo(queryString, items, table) {
       info(`Smaller increment failed:`, {increment, startingIndex:start, endingIndex: end})
       if (er.response.status === 500) {
         if (typeof er.response.data === 'string' && er.response.data.includes("Error during serialization or deserialization using the JSON JavaScriptSerializer. The length of the string exceeds the value set on the maxJsonLength property")) {
-          return catchMaxJsonTwo(queryString, keys, table) 
+          return catchMaxJson(queryString, keys, table) 
         }
       }
       error(er);
@@ -426,6 +389,7 @@ async function catchMaxJsonTwo(queryString, items, table) {
 }
 
 
+/*
 async function getComponentData(mapunits) {
   let url = "https://sdmdataaccess.sc.egov.usda.gov/Tabular/post.rest?SERVICE=query&REQUEST=query";
   let data = {
@@ -474,7 +438,6 @@ async function getHorizonData(components) {
   return horizon;
 }
 
-/*
 async function newAoiid(boundary, name) {
   let accessed = moment().format();
   let aoiid = await aoiFromDem()
@@ -534,6 +497,54 @@ async function aoiFromDem(demfile) {
 */
 
 
+export async function aggregate(soils, aoi) {
+  console.log(soils, aoi);
+  info(`Retreiving SSURGO soil data for the AOI`);
+  //1. Get bbox of AOI
+  /*
+  let poly = turf.polygon(aoi.coordinates);
+  let totalArea = turf.area(poly);;
+  let bbox = turf.bbox(poly);
+
+  let aoiData = { 
+    soils: {},
+    area: {
+      value: totalArea,
+      units: 'm^2'
+    },
+    bbox
+  }
+
+  //2. Get corresponding soil polygons
+  await Promise.each(Object.keys(soils.mupolygon || {}), async (mup) => {
+    let {geojson, mupolygonkey, mukey } = soils.mupolygon[mup];
+    console.log(mupolygonkey);
+    let polygon = turf.polygon(geojson.coordinates);
+    let geom = turf.intersect(polygon, poly)
+
+    if (geom) {
+      let area = turf.area(geom);
+      aoiData.soils[mukey] = aoiData.soils[mukey] || {
+        area: 0, 
+        percent: 0,
+        'map-unit-polygons': {}
+      }
+      aoiData.soils[mukey].area += area
+      aoiData.soils[mukey].percent = aoiData.soils[mukey].area/totalArea;
+//      aoiData.soils[mukey]['map-unit-polygons'][mup] = {_id};
+
+      if (!aoiData.soils[mukey]['map-unit']) {
+        //let id = await CONN.head({
+        //  path: `/bookmarks/soils/tabular/mapUnitPolygons/${mup}`
+        //}).then(r => r.headers['content-location'].replace(/^\//, ''))
+        //aoiData.soils[mukey]['map-unit'] = {_id: id}
+      }
+    }
+  })
+  return aoiData;
+       */
+}
+
 function tableNameToKeyName(tableName: string) : string {
   let keys = {
     'SACATALOG': 'AREASYMBOL',
@@ -560,7 +571,6 @@ let tableTree = {
     LEGENDTEXT: {}
   },
   MAPUNIT: {
-//    MUPOLYGON: {},
     MUCROPYLD: {},
     MUTEXT: {},
     MUAGGATT: {},
@@ -622,11 +632,13 @@ let tableTree = {
         CHUNIFIED: {},
       }
     }
-  }
+  },
+  MUPOLYGON: {},
 }
 
 module.exports = {
   fromCounty,
   fromWkt,
   query,
+  aggregate
 }

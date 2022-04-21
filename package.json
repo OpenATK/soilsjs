@@ -24,6 +24,7 @@
     "fips-county-codes": "^2.1.0",
     "json-pointer": "^0.6.2",
     "lodash": "^4.17.21",
+    "turf-jsts": "^1.2.3",
     "wicket": "^1.3.6"
   },
   "packageManager": "yarn@3.2.0",
