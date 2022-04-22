@@ -1,6 +1,9 @@
 const pointer = require('json-pointer');
-//const turf = require('@turf/turf');
+const wellknown = require('wellknown');
+const _ = require('lodash');
+const turf = require('@turf/turf');
 const fips = require('fips-county-codes');
+const fs = require('fs');
 const ar = require('axios-retry');
 const axios = require('axios');
 const debug = require('debug');
@@ -86,7 +89,7 @@ async function fromWkt(wkt, config?) {
       url: "https://sdmdataaccess.sc.egov.usda.gov/Tabular/post.rest?",
       data: {
         QUERY: `SELECT * FROM SDA_Get_Mupolygonkey_from_intersection_with_WktWgs84(${wkt})`, 
-        FORMAT: 'JSON+COLUMNNAME'
+        FORMAT: 'JSON+COLUMNNAME+METADATA'
       }
     })
     .then(r => r.data.Table)
@@ -95,12 +98,13 @@ async function fromWkt(wkt, config?) {
       obj.mupolygon[p.mupolygonkey] = p;
     })
 
+
     table = await axios({
       method: "post", 
       url: "https://sdmdataaccess.sc.egov.usda.gov/Tabular/post.rest?",
       data: {
         QUERY: `SELECT * from mupolygon where mupolygonkey IN (${Object.keys(obj.mupolygon).join(',')})`,
-        FORMAT: 'JSON+COLUMNNAME'
+        FORMAT: 'JSON+COLUMNNAME+METADATA'
       }
     })
     .then(r => r.data.Table)
@@ -169,7 +173,7 @@ async function fromAreaSymbol(areaSymbol, config) {
       url: "https://sdmdataaccess.sc.egov.usda.gov/Tabular/post.rest?",
       data: {
         QUERY: `SELECT * from mupolygon where mukey IN (${Object.keys(mukeys).join(',')}) and areasymbol IN ('${areaSymbol}')`,
-        FORMAT: 'JSON+COLUMNNAME'
+        FORMAT: 'JSON+COLUMNNAME+METADATA'
       }
     })
     .then(r => r.data.Table)
@@ -232,7 +236,7 @@ async function fetchDataFromMukeys(mukeys, config) {
     url: "https://sdmdataaccess.sc.egov.usda.gov/Tabular/post.rest?",
     data: {
       'QUERY': `SELECT * from mapunit where mukey IN (${Object.keys(mukeys).join(',')})`,
-      'FORMAT': 'JSON+COLUMNNAME'
+      'FORMAT': 'JSON+COLUMNNAME+METADATA'
     }
   })
   let table = res.data.Table;
@@ -361,7 +365,7 @@ async function catchMaxJson(queryString, items, table) {
       url: "https://sdmdataaccess.sc.egov.usda.gov/Tabular/post.rest?",
       data: {
         QUERY: Q,
-        'FORMAT': 'JSON+COLUMNNAME'
+        'FORMAT': 'JSON+COLUMNNAME+METADATA'
       }
     // recursively repeat if it fails again
     }).then((resp) => {
@@ -496,53 +500,115 @@ async function aoiFromDem(demfile) {
 }
 */
 
-
-export async function aggregate(soils, aoi) {
-  console.log(soils, aoi);
+//TODO: Consider returning just the aggregate object content, then using
+// Object.assign to merge it into the soils object outside of this function.
+export async function aggregate(soils, wkt) {
+  let aoi = wellknown.parse(wkt);
   info(`Retreiving SSURGO soil data for the AOI`);
   //1. Get bbox of AOI
-  /*
   let poly = turf.polygon(aoi.coordinates);
   let totalArea = turf.area(poly);;
-  let bbox = turf.bbox(poly);
 
-  let aoiData = { 
-    soils: {},
-    area: {
-      value: totalArea,
-      units: 'm^2'
-    },
-    bbox
-  }
+  let out = _.cloneDeep(soils);
 
-  //2. Get corresponding soil polygons
-  await Promise.each(Object.keys(soils.mupolygon || {}), async (mup) => {
-    let {geojson, mupolygonkey, mukey } = soils.mupolygon[mup];
-    console.log(mupolygonkey);
+  //1. Start with finding area of each map unit via map unit polygons;
+  Object.values(out.mupolygon || {}).forEach((mup: any) => {
+    let { mupolygongeo, mukey, mupolygonkey } = mup;
+    let geojson = wellknown.parse(mupolygongeo);
     let polygon = turf.polygon(geojson.coordinates);
     let geom = turf.intersect(polygon, poly)
 
     if (geom) {
       let area = turf.area(geom);
-      aoiData.soils[mukey] = aoiData.soils[mukey] || {
-        area: 0, 
-        percent: 0,
-        'map-unit-polygons': {}
+      out.mapunit[mukey].aggregate = out.mapunit[mukey].aggregate || {
+        area: {
+          sum: 0,
+          percent: 0,
+        },
+        mupolygon: {},
+        component: {
+          percent_sum: 0
+        }
       }
-      aoiData.soils[mukey].area += area
-      aoiData.soils[mukey].percent = aoiData.soils[mukey].area/totalArea;
-//      aoiData.soils[mukey]['map-unit-polygons'][mup] = {_id};
-
-      if (!aoiData.soils[mukey]['map-unit']) {
-        //let id = await CONN.head({
-        //  path: `/bookmarks/soils/tabular/mapUnitPolygons/${mup}`
-        //}).then(r => r.headers['content-location'].replace(/^\//, ''))
-        //aoiData.soils[mukey]['map-unit'] = {_id: id}
+      out.mapunit[mukey].mukey = mukey;
+      out.mapunit[mukey].aggregate.area.sum += area
+      out.mapunit[mukey].aggregate.area.percent = out.mapunit[mukey].aggregate.area.sum/totalArea;
+      out.mapunit[mukey].aggregate.mupolygon[mupolygonkey] = {
+        mupolygonkey,
+        area,
+        percent: area/totalArea
       }
     }
   })
-  return aoiData;
-       */
+
+  //2. Figure out percentage of each component. Components can occur in many
+  //   different mapunits.
+  Object.keys(out.mapunit || {}).forEach((mukey) => {
+    let mapunit = out.mapunit[mukey];
+    let knownCompQuant = {
+      count: 0,
+      sum: 0
+    };
+
+    //Determine if some components are missing comppct
+    Object.keys(mapunit.component).map((cokey) => {
+      let component = soils.component[cokey];
+      if (parseFloat(component.comppct_r)) {
+        knownCompQuant.sum += parseFloat(component.comppct_r);
+      } else {
+        knownCompQuant.count++;
+      }
+    })
+
+    Object.keys(mapunit.component || {}).forEach((cokey) => {
+      let component = soils.component[cokey];
+
+      // component percent is either the listed percent or equally-split
+      // proportion of the components that have no listed percent;
+      let component_percent = (parseFloat(component.comppct_r) || ((100-knownCompQuant.sum)/knownCompQuant.count))/100;
+      out.mapunit[mukey].aggregate.component.percent_sum += component_percent;
+      out.component[cokey].aggregate = out.component[cokey].aggregate || {
+        area: {
+          sum: 0,
+        },
+        hzthk_r: {
+          sum: 0
+        }
+      }
+      out.component[cokey].aggregate.area.sum += mapunit.aggregate.area.sum*component_percent;
+      out.component[cokey].aggregate.area.percent = out.component[cokey].aggregate.area.sum/totalArea;
+
+      //TODO: Some components have no horizons...shouldn't be a problem at this
+      // stage, but mostly at the point of aggregating horizon-level component
+      //3. Get horizons. Depth-order should be achieved by sorting the keys;
+      Object.keys(component.chorizon || {}).sort().forEach(async (chkey) => {
+        let horizon = out.chorizon[chkey];
+
+        // All aggregations will be based weighted based on representative 
+        // horizon thickness value
+        let weight = parseFloat(horizon.hzthk_r);
+        out.component[cokey].aggregate.hzthk_r.sum += weight;
+        let weightSum = out.component[cokey].aggregate.hzthk_r.sum;
+
+        // Now iterate and perform weighted sums;
+        let skips = ["hzthk_r"]
+        Object.keys(horizon).forEach((key) => {
+          if (!key.includes("key") && !skips.includes(key)) {
+            if (parseFloat(horizon[key])) {
+              out.component[cokey].aggregate[key] = out.component[cokey].aggregate[key] || {
+                sum: 0
+              };
+              out.component[cokey].aggregate[key].sum += weight*horizon[key];
+              out.component[cokey].aggregate[key].percent = out.component[cokey].aggregate[key].sum/weightSum;
+            }
+          }
+        })
+      })
+    })
+  })
+
+  fs.writeFileSync(`./soil-outputs.json`, JSON.stringify(out))
+  return out;
 }
 
 function tableNameToKeyName(tableName: string) : string {
