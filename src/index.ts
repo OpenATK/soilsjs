@@ -1,6 +1,6 @@
 const pointer = require('json-pointer');
 const wellknown = require('wellknown');
-const _ = require('lodash');
+//const _ = require('lodash');
 const turf = require('@turf/turf');
 const fips = require('fips-county-codes');
 const fs = require('fs');
@@ -509,10 +509,13 @@ export async function aggregate(soils, wkt) {
   let poly = turf.polygon(aoi.coordinates);
   let totalArea = turf.area(poly);;
 
-  let out = _.cloneDeep(soils);
+  let out : any = {
+    mapunit: {},
+    component: {}
+  };
 
   //1. Start with finding area of each map unit via map unit polygons;
-  Object.values(out.mupolygon || {}).forEach((mup: any) => {
+  Object.values(soils.mupolygon || {}).forEach((mup: any) => {
     let { mupolygongeo, mukey, mupolygonkey } = mup;
     let geojson = wellknown.parse(mupolygongeo);
     let polygon = turf.polygon(geojson.coordinates);
@@ -520,6 +523,7 @@ export async function aggregate(soils, wkt) {
 
     if (geom) {
       let area = turf.area(geom);
+      out.mapunit[mukey] = out.mapunit[mukey] || {mukey};
       out.mapunit[mukey].aggregate = out.mapunit[mukey].aggregate || {
         area: {
           sum: 0,
@@ -530,7 +534,6 @@ export async function aggregate(soils, wkt) {
           percent_sum: 0
         }
       }
-      out.mapunit[mukey].mukey = mukey;
       out.mapunit[mukey].aggregate.area.sum += area
       out.mapunit[mukey].aggregate.area.percent = out.mapunit[mukey].aggregate.area.sum/totalArea;
       out.mapunit[mukey].aggregate.mupolygon[mupolygonkey] = {
@@ -543,8 +546,8 @@ export async function aggregate(soils, wkt) {
 
   //2. Figure out percentage of each component. Components can occur in many
   //   different mapunits.
-  Object.keys(out.mapunit || {}).forEach((mukey) => {
-    let mapunit = out.mapunit[mukey];
+  Object.keys(soils.mapunit || {}).forEach((mukey) => {
+    let mapunit = soils.mapunit[mukey];
     let knownCompQuant = {
       count: 0,
       sum: 0
@@ -567,6 +570,7 @@ export async function aggregate(soils, wkt) {
       // proportion of the components that have no listed percent;
       let component_percent = (parseFloat(component.comppct_r) || ((100-knownCompQuant.sum)/knownCompQuant.count))/100;
       out.mapunit[mukey].aggregate.component.percent_sum += component_percent;
+      out.component[cokey] = out.component[cokey] || {cokey};
       out.component[cokey].aggregate = out.component[cokey].aggregate || {
         area: {
           sum: 0,
@@ -575,34 +579,49 @@ export async function aggregate(soils, wkt) {
           sum: 0
         }
       }
-      out.component[cokey].aggregate.area.sum += mapunit.aggregate.area.sum*component_percent;
+      out.component[cokey].aggregate.area.sum += out.mapunit[mukey].aggregate.area.sum*component_percent;
       out.component[cokey].aggregate.area.percent = out.component[cokey].aggregate.area.sum/totalArea;
 
       //TODO: Some components have no horizons...shouldn't be a problem at this
       // stage, but mostly at the point of aggregating horizon-level component
       //3. Get horizons. Depth-order should be achieved by sorting the keys;
       Object.keys(component.chorizon || {}).sort().forEach(async (chkey) => {
-        let horizon = out.chorizon[chkey];
+        let horizon = soils.chorizon[chkey];
 
         // All aggregations will be based weighted based on representative 
         // horizon thickness value
         let weight = parseFloat(horizon.hzthk_r);
         out.component[cokey].aggregate.hzthk_r.sum += weight;
-        let weightSum = out.component[cokey].aggregate.hzthk_r.sum;
 
         // Now iterate and perform weighted sums;
         let skips = ["hzthk_r"]
         Object.keys(horizon).forEach((key) => {
           if (!key.includes("key") && !skips.includes(key)) {
             if (parseFloat(horizon[key])) {
+              // Computed Weighted values for component
               out.component[cokey].aggregate[key] = out.component[cokey].aggregate[key] || {
-                sum: 0
+                weightedSum: 0,
+                sumWeight: 0
               };
-              out.component[cokey].aggregate[key].sum += weight*horizon[key];
-              out.component[cokey].aggregate[key].percent = out.component[cokey].aggregate[key].sum/weightSum;
+              out.component[cokey].aggregate[key].weightedSum += weight*horizon[key];
+              out.component[cokey].aggregate[key].sumWeight += out.component[cokey].aggregate.hzthk_r.sum;
+              out.component[cokey].aggregate[key].value = out.component[cokey].aggregate[key].weightedSum/out.component[cokey].aggregate[key].sumWeight;
             }
           }
         })
+      })
+
+      let skips = ["hzthk_r", "area"]
+      let horizonkeys = Object.keys(out.component[cokey].aggregate).filter(key => !skips.includes(key));
+      horizonkeys.forEach((key) => {
+        // Computed Weighted values for mapunit
+        out.mapunit[mukey].aggregate[key] = out.mapunit[mukey].aggregate[key] || {
+          weightedSum: 0,
+          sumWeight: 0
+        };
+        out.mapunit[mukey].aggregate[key].weightedSum += out.component[cokey].aggregate[key].value*component_percent;
+        out.mapunit[mukey].aggregate[key].sumWeight = out.mapunit[mukey].aggregate.component.percent_sum;
+        out.mapunit[mukey].aggregate[key].value = out.mapunit[mukey].aggregate[key].weightedSum/out.mapunit[mukey].aggregate[key].sumWeight;
       })
     })
   })

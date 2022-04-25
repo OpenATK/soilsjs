@@ -102,5 +102,14 @@ describe('Overall functional tests: all.test.js', function() {
       sum += agg.component[cokey].aggregate.area.percent;
     }
     expect(sum).to.be.approximately(weighted, 0.001)
+
+    // Sum the area percent across the mupolygons
+    sum = 0;
+    Object.values(agg.mapunit).forEach((mapunit: any) => {
+      Object.values(mapunit.aggregate.mupolygon).forEach((mupolygon: any) => {
+        sum += mupolygon.percent;
+      })
+    })
+    expect(sum).to.be.approximately(1, 0.001)
   })
 });
