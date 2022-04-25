@@ -16,46 +16,40 @@ Require the module:
 const soilsjs = require('soilsjs')
 ```
 
-### fromWkt
+### fromWkt(wkt)
 Return the primary soil data tables for an input geometry in Well Known Text (WKT) format. Refer to other packages for translation from geojson or other formats into WKT.
 ```
-let wktStr = 'polygon((-86.7302676178553 40.4031488400723, -86.73027138053 71 40.4032666167283, -86.7303980022839 40.4035503896778, -86.7303774411828 40.4036807296437, -86.7303165534701 40.4037264832885, -86.7301845989508 40.4037311353392, -86.7299436537218 40.4036649894988, -86.7298337880099 40.403619241858, -86.7296261195992 40.4034443198906, -86.7295670365752 40.403375396507, -86.7295487963104 40.4033229296444, -86.7295891651778 40.4032971947975, -86.7296751509818 40.4031779428205, -86.7297926075345 40.4030645919529, -86.7299309407755 40.402974302328, -86.7300830258591 40.4029800998273, -86.7301991374799 40.40306039039, -86.7302676178553 40.4031488400723))';
+let wktStr = 'POLYGON ((-86.97704315185547 40.4821767494622, -86.97715044021605 40.48469011732992, -86.98195695877075 40.48469011732992, -86.98187112808228 40.4822093912065, -86.97704315185547 40.4821767494622))';
 let soils = await soilsjs.fromWkt(wktStr);
 ```
 
 ### fromCounty:
 Good for larger data queries. Generates a FIPS code-based AreaSymbol from county and state info.
 ```
-let soils = await soilsjs.fromCounty("Tippecanoe","IN") // "abbreviate"
+let soils = await soilsjs.fromCounty("IN","Tippecanoe") // "abbreviate"
 ```
 
 ### Configure the data tables returned:
 Specify the set of data tables to request. Add a configuration object as the last argument of each supported method (fromWkt, fromCounty). 
-Refer to <https://sdmdataaccess.sc.egov.usda.gov/documents/TableRelationshipsDiagram.pdf> for a layout of the data tables.
-The configuration should be an object with nested tables rooted at `mapunit` consistent with the above diagram.
-
+Refer to <https://sdmdataaccess.sc.egov.usda.gov/documents/TableRelationshipsDiagram.pdf> for the available data tables.
 ```
-let config = {
-  mupolygon: {},
-  mapunit: {
-    component: {
-      comonth: {}, //Add the COMONTH data table
-      chorizon: {}
-    }                                                                           
-  }                                                                             
-}
-let soils = await soilsjs.fromWkt(wktStr, config) //optional second argument
+let config = [
+  "mupolygon",
+  "mapunit",
+  "component",
+  "chorizon",
+  "comonth", //Add the COMONTH data table
+];
+let soils = await soilsjs.fromCounty("IN", "Tippecanoe", {config}) //optional last argument
 ```
 Additional data tables will be returned as top level keys like the others. The default config is:
 ```
-let config = {
-  mupolygon: {},
-  mapunit: {
-    component: {
-      chorizon: {}
-    }                                                                           
-  }                                                                             
-}
+let config = [
+  "mupolygon",
+  "mapunit",
+  "component",
+  "chorizon",
+];
 ```
 
 ### Custom Query
@@ -70,7 +64,7 @@ There is a sample json output also included in the repo: <https://github.com/Ope
 In short, it will return a mostly flat object listing the table names at the top level. Under each table, each entry object is keyed under its primary key:
 ```
 {
-  mapunit: { // SSURGO table names
+  mapunit: { // SSURGO table name
     164156: { // SURGO table primary identifier (mukey,i.e., map unit key)
       mukey: '164156',                                                          
       musym: 'Mu',                                                              
@@ -101,5 +95,70 @@ In short, it will return a mostly flat object listing the table names at the top
   }
 }
 ```
+
+### aggregate
+Aggregate horizon parameters up to components using a weighted average where the weight is the thickness of that horizon. Aggregate horizon and component data up to the map unit with weighted averages given the specified percentages of each component. Currently only parameters for which `parseFloat` succeed are aggregated up. It also returns the area proportion of each map unit polygon, map unit, and component. The output of the aggregate function is merge-friendly into the soils object output (shown below). Percents are 
+```
+let soils = await soilsjs.fromWkt(wktStr);
+let aggregate = soilsjs.aggregate(soils, wktStr); //standalone object with the aggregation parameters
+Object.assign(soils, aggregate).
+//ALTERNATIVELY, do these three lines as:
+let soils = await soilsjs.fromWkt(wktStr, {aggregate: true});
+
+console.log(aggregate);
+/*
+{
+  "mapunit": {
+    "163904":{
+      "mukey":"163904",
+      "aggregate":{
+        "area":{
+          "sum":12873.932302290652,
+          "percent":0.11356574520120395
+        },
+        "mupolygon":{  //per-polygon breakdown of area and percent of this polygon versus the input wkt geometry
+          "257526563":{
+            "mupolygonkey":"257526563",
+            "area":12873.932302290652,
+            "percent":0.11356574520120395,
+            "geometry":{
+              "type":"Feature",
+              "properties":{},
+              "geometry":{
+                "type":"Polygon",
+                "coordinates":[[[-86.98191051531971,40.48334778297007],[-86.98189579445415,40.48292231235579],[-86.9817526082302,40.4828531332318],[-86.9815955356254,40.4828006636962],[-86.981417262679,40.4828211110973],...]],
+              }
+            }
+          }
+        },
+        "chorizon":{ // Horizon-level aggregations
+          "desgnvert":{
+            "weightedSum":1.0266666666666666,
+            "sumWeight":1,
+            "value":1.0266666666666666
+          },
+          ...// other horizon aggregations
+        },
+        "component":{ //Component-level aggregations
+          "percent_sum":1,
+          "comppct_r":{
+            "weightedSum":100,
+            "sumWeight":1,
+            "value":100
+          },
+          ... // other component aggregations
+        }
+      }
+    }
+  },
+  "component": {
+    "aggregate": {
+      ... // Per-component aggregations of horizon data
+    }
+  }
+}
+*/
+```
+
 
 For additional SDM Data Access API details, see <https://sdmdataaccess.nrcs.usda.gov/WebServiceHelp.aspx>
