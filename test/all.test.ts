@@ -2,9 +2,9 @@ import { expect } from 'chai';
 //import fs from 'fs';
 //import { setTimeout } from 'timers/promises';
 //import { connect, OADAClient } from '@oada/client';
-let { fromWkt, fromCounty, query, aggregate } = require('../dist/index');
+let { fromWkt, fromCounty, query } = require('../dist/index');
 
-let testWkt = `POLYGON ((-86.97704315185547 40.4821767494622, -86.97715044021605 40.48469011732992, -86.98195695877075 40.48469011732992, -86.98187112808228 40.4822093912065, -86.97704315185547 40.4821767494622))`
+let testWkt = `polygon((-86.97704315185547 40.4821767494622, -86.97715044021605 40.48469011732992, -86.98195695877075 40.48469011732992, -86.98187112808228 40.4822093912065, -86.97704315185547 40.4821767494622))`
 
 let config = [
   'mupolygon',
@@ -24,13 +24,13 @@ describe('Overall functional tests: all.test.js', function() {
   });
 
   it('Should get map unit data', async () => {
-    let result = await fromCounty('IN','Tippecanoe', config);
+    let result = await fromCounty('IN', 'Tippecanoe', {config});
 
     expect(result).to.have.all.keys(...['mapunit', 'component', 'chorizon', 'comonth', 'mupolygon'])
   });
 
   it(`Should retreive the data for a given wkt`, async () => {
-    let result = await fromWkt(testWkt, config);
+    let result = await fromWkt(testWkt,{config});
 
     expect(result).to.have.all.keys(...['mapunit', 'component', 'chorizon', 'comonth', 'mupolygon'])
   });
@@ -39,12 +39,6 @@ describe('Overall functional tests: all.test.js', function() {
     let result = await fromWkt(testWkt);
     expect(result).to.have.all.keys(...['mapunit', 'component', 'chorizon', 'mupolygon'])
   });
-
-  /*
-  it('Should prune undesired pieces when given custom config', async () => {
-    expect().to.have.own.property('')
-  });
- */
 
   it('Should return the response of a query', async () => {
     let q = `SELECT * from MUAOVERLAP where mukey IN (163833)`
@@ -62,20 +56,18 @@ describe('Overall functional tests: all.test.js', function() {
       'comonth',
       'chorizon',
     ]
-    let result = await fromWkt(testWkt, conf);
+    let result = await fromWkt(testWkt, {config:conf});
     expect(result).to.have.all.keys(...conf);
     conf = [
       'chorizon',
     ]
-    result = await fromWkt(testWkt, conf);
+    result = await fromWkt(testWkt, {config:conf});
     expect(result).to.not.have.keys(['mapunit']);
-
   });
 
   it('Aggregate should produce average areas as well as area-weighed average for each float-type attribute at the component and horizon level.', async () => {
-    let result = await fromWkt(testWkt);
-    expect(result).to.have.all.keys(...['mapunit', 'component', 'chorizon', 'mupolygon'])
-    let agg = await aggregate(result, testWkt);
+    let agg = await fromWkt(testWkt, {aggregate: true});
+    expect(agg).to.have.all.keys(...['mapunit', 'component', 'chorizon', 'mupolygon'])
 
     let mu : any = Object.values(agg.mapunit)[0];
     expect(mu).to.include.keys(['aggregate'])

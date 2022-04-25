@@ -47,7 +47,7 @@ function parseQueryResult(table, keyname) {
   return {arrayData, objData}
 }
 
-async function fromCounty(state, county, config?) {
+async function fromCounty(state, county, {config}) {
   config = config || defaultConfig;
   let fip = fips.get({
     state,
@@ -59,10 +59,10 @@ async function fromCounty(state, county, config?) {
 }
 
 // The WKT string itself won't work, it must be surrounded by single quotes, e.g., 'x'
-async function fromWkt(wkt, config?) {
+async function fromWkt(wkt, {config, aggregate}) {
   config = config || defaultConfig;
-  wkt = `'${wkt}'`; // HERE IS THE MODIFICATION NECESSARY FOR THEIR API
-  let QUERY = `SELECT * FROM SDA_Get_Mukey_from_intersection_with_WktWgs84(${wkt})`;
+  let ssurgoWkt = `'${wkt}'`; // HERE IS THE MODIFICATION NECESSARY FOR THEIR API
+  let QUERY = `SELECT * FROM SDA_Get_Mukey_from_intersection_with_WktWgs84(${ssurgoWkt})`;
   trace(`Generated query: ${QUERY}`) 
   let response = await axios({
     method: "post", 
@@ -88,7 +88,7 @@ async function fromWkt(wkt, config?) {
       method: "post", 
       url: "https://sdmdataaccess.sc.egov.usda.gov/Tabular/post.rest?",
       data: {
-        QUERY: `SELECT * FROM SDA_Get_Mupolygonkey_from_intersection_with_WktWgs84(${wkt})`, 
+        QUERY: `SELECT * FROM SDA_Get_Mupolygonkey_from_intersection_with_WktWgs84(${ssurgoWkt})`, 
         FORMAT: 'JSON+COLUMNNAME+METADATA'
       }
     })
@@ -121,6 +121,11 @@ async function fromWkt(wkt, config?) {
     result = parseQueryResult(table, 'mupolygonkey');
     let objData = result.objData;
     obj.mupolygon = objData;
+  }
+
+  if (aggregate) {
+    let agg = await _aggregate(obj, wkt)
+    Object.assign(obj, agg)
   }
   return obj;
 }
@@ -502,7 +507,7 @@ async function aoiFromDem(demfile) {
 
 //TODO: Consider returning just the aggregate object content, then using
 // Object.assign to merge it into the soils object outside of this function.
-export async function aggregate(soils, wkt) {
+export function _aggregate(soils, wkt) {
   let aoi = wellknown.parse(wkt);
   info(`Retreiving SSURGO soil data for the AOI`);
   //1. Get bbox of AOI
@@ -530,6 +535,7 @@ export async function aggregate(soils, wkt) {
           percent: 0,
         },
         mupolygon: {},
+        chorizon: {},
         component: {
           percent_sum: 0
         }
@@ -538,8 +544,11 @@ export async function aggregate(soils, wkt) {
       out.mapunit[mukey].aggregate.area.percent = out.mapunit[mukey].aggregate.area.sum/totalArea;
       out.mapunit[mukey].aggregate.mupolygon[mupolygonkey] = {
         mupolygonkey,
-        area,
-        percent: area/totalArea
+        area: {
+          sum: area,
+          percent: area/totalArea,
+        },
+        geometry: geom
       }
     }
   })
@@ -575,8 +584,10 @@ export async function aggregate(soils, wkt) {
         area: {
           sum: 0,
         },
-        hzthk_r: {
-          sum: 0
+        chorizon: {
+          hzthk_r: {
+            sum: 0
+          }
         }
       }
       out.component[cokey].aggregate.area.sum += out.mapunit[mukey].aggregate.area.sum*component_percent;
@@ -591,38 +602,54 @@ export async function aggregate(soils, wkt) {
         // All aggregations will be based weighted based on representative 
         // horizon thickness value
         let weight = parseFloat(horizon.hzthk_r);
-        out.component[cokey].aggregate.hzthk_r.sum += weight;
+        out.component[cokey].aggregate.chorizon.hzthk_r.sum += weight;
 
-        // Now iterate and perform weighted sums;
+        // Aggregate horizon data up to component;
         let skips = ["hzthk_r"]
         Object.keys(horizon).forEach((key) => {
           if (!key.includes("key") && !skips.includes(key)) {
             if (parseFloat(horizon[key])) {
               // Computed Weighted values for component
-              out.component[cokey].aggregate[key] = out.component[cokey].aggregate[key] || {
+              out.component[cokey].aggregate.chorizon[key] = out.component[cokey].aggregate.chorizon[key] || {
                 weightedSum: 0,
                 sumWeight: 0
               };
-              out.component[cokey].aggregate[key].weightedSum += weight*horizon[key];
-              out.component[cokey].aggregate[key].sumWeight += out.component[cokey].aggregate.hzthk_r.sum;
-              out.component[cokey].aggregate[key].value = out.component[cokey].aggregate[key].weightedSum/out.component[cokey].aggregate[key].sumWeight;
+              out.component[cokey].aggregate.chorizon[key].weightedSum += weight*horizon[key];
+              out.component[cokey].aggregate.chorizon[key].sumWeight += out.component[cokey].aggregate.chorizon.hzthk_r.sum;
+              out.component[cokey].aggregate.chorizon[key].value = out.component[cokey].aggregate.chorizon[key].weightedSum/out.component[cokey].aggregate.chorizon[key].sumWeight;
             }
           }
         })
       })
 
-      let skips = ["hzthk_r", "area"]
-      let horizonkeys = Object.keys(out.component[cokey].aggregate).filter(key => !skips.includes(key));
+      // Aggregate horizon data up to map unit 
+      let skips = ["hzthk_r"]
+      let horizonkeys = Object.keys(out.component[cokey].aggregate.chorizon).filter(key => !skips.includes(key));
       horizonkeys.forEach((key) => {
-        // Computed Weighted values for mapunit
-        out.mapunit[mukey].aggregate[key] = out.mapunit[mukey].aggregate[key] || {
+        out.mapunit[mukey].aggregate.chorizon[key] = out.mapunit[mukey].aggregate.chorizon[key] || {
           weightedSum: 0,
           sumWeight: 0
         };
-        out.mapunit[mukey].aggregate[key].weightedSum += out.component[cokey].aggregate[key].value*component_percent;
-        out.mapunit[mukey].aggregate[key].sumWeight = out.mapunit[mukey].aggregate.component.percent_sum;
-        out.mapunit[mukey].aggregate[key].value = out.mapunit[mukey].aggregate[key].weightedSum/out.mapunit[mukey].aggregate[key].sumWeight;
+        out.mapunit[mukey].aggregate.chorizon[key].weightedSum += out.component[cokey].aggregate.chorizon[key].value*component_percent;
+        out.mapunit[mukey].aggregate.chorizon[key].sumWeight = out.mapunit[mukey].aggregate.component.percent_sum;
+        out.mapunit[mukey].aggregate.chorizon[key].value = out.mapunit[mukey].aggregate.chorizon[key].weightedSum/out.mapunit[mukey].aggregate.chorizon[key].sumWeight;
       })
+
+      // Aggregate component data up to map unit 
+      Object.keys(component).forEach((key) => {
+        if (!key.includes("key") && !skips.includes(key)) {
+          if (parseFloat(component[key])) {
+            out.mapunit[mukey].aggregate.component[key] = out.mapunit[mukey].aggregate.component[key] || {
+              weightedSum: 0,
+              sumWeight: 0
+            };
+            out.mapunit[mukey].aggregate.component[key].weightedSum += component[key]*component_percent;
+            out.mapunit[mukey].aggregate.component[key].sumWeight = out.mapunit[mukey].aggregate.component.percent_sum;
+            out.mapunit[mukey].aggregate.component[key].value = out.mapunit[mukey].aggregate.component[key].weightedSum/out.mapunit[mukey].aggregate.component[key].sumWeight;
+          }
+        }
+      })
+
     })
   })
 
@@ -725,5 +752,5 @@ module.exports = {
   fromCounty,
   fromWkt,
   query,
-  aggregate
+  aggregate: _aggregate
 }
