@@ -1,6 +1,7 @@
 const pointer = require('json-pointer');
+const fs = require('fs');
 const wellknown = require('wellknown');
-//const _ = require('lodash');
+const _ = require('lodash');
 const turf = require('@turf/turf');
 const fips = require('fips-county-codes');
 const ar = require('axios-retry');
@@ -124,8 +125,9 @@ async function fromWkt(wkt, {config, aggregate}) {
 
   if (aggregate) {
     let agg = await _aggregate(obj, wkt)
-    Object.assign(obj, agg)
+    _.merge(obj, agg)
   }
+  fs.writeFileSync(`./soil-outputs.json`, JSON.stringify(obj));
   return obj;
 }
 
@@ -504,8 +506,6 @@ async function aoiFromDem(demfile) {
 }
 */
 
-//TODO: Consider returning just the aggregate object content, then using
-// Object.assign to merge it into the soils object outside of this function.
 export function _aggregate(soils, wkt) {
   let aoi = wellknown.parse(wkt);
   info(`Retreiving SSURGO soil data for the AOI`);
