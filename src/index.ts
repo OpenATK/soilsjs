@@ -3,7 +3,6 @@ const wellknown = require('wellknown');
 //const _ = require('lodash');
 const turf = require('@turf/turf');
 const fips = require('fips-county-codes');
-const fs = require('fs');
 const ar = require('axios-retry');
 const axios = require('axios');
 const debug = require('debug');
@@ -31,7 +30,7 @@ function parseQueryResult(table, keyname) {
   if (table === undefined) throw new Error('Resulting data table is undefined');
   let headers = table.shift();
   //@ts-ignore
-  let metadata = table.shift();
+  let metadata = table.shift();// metadata on these is mostly useless; just specifies data type and some sql database stuff; I wish it had units...
   // The remainder of the array are the results
   let rows = table;
   let objData = {};
@@ -44,7 +43,7 @@ function parseQueryResult(table, keyname) {
     if (keyname) objData[key] = obj;
     return obj;
   })
-  return {arrayData, objData}
+  return {arrayData, objData, metadata}
 }
 
 async function fromCounty(state, county, {config}) {
@@ -653,7 +652,6 @@ export function _aggregate(soils, wkt) {
     })
   })
 
-  fs.writeFileSync(`./soil-outputs.json`, JSON.stringify(out))
   return out;
 }
 
