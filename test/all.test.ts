@@ -2,6 +2,7 @@ import { expect } from 'chai';
 let { fromWkt, fromCounty, query } = require('../dist/index');
 
 let testWkt = `polygon((-86.97704315185547 40.4821767494622, -86.97715044021605 40.48469011732992, -86.98195695877075 40.48469011732992, -86.98187112808228 40.4822093912065, -86.97704315185547 40.4821767494622))`
+let testPoint = `point(-86.97950005531311 40.48343343339606)`
 
 let config = [
   'mupolygon',
@@ -26,8 +27,15 @@ describe('Overall functional tests: all.test.js', function() {
     expect(result).to.have.all.keys(...['mapunit', 'component', 'chorizon', 'comonth', 'mupolygon'])
   });
 
-  it(`Should retreive the data for a given wkt`, async () => {
+  it(`Should retreive the data for a given polygon wkt`, async () => {
     let result = await fromWkt(testWkt,{config});
+
+    expect(result).to.have.all.keys(...['mapunit', 'component', 'chorizon', 'comonth', 'mupolygon'])
+  });
+
+  it(`Should retreive the data for a given point wkt`, async () => {
+    let result = await fromWkt(testPoint,{config});
+    console.log(result);
 
     expect(result).to.have.all.keys(...['mapunit', 'component', 'chorizon', 'comonth', 'mupolygon'])
   });

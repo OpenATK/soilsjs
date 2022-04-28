@@ -1,12 +1,12 @@
 {
   "name": "soilsjs",
-  "version": "1.0.4",
+  "version": "1.0.6",
   "description": "A node module for accessing SSURGO soils data within the US",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc -b",
     "watch": "tsc -b --watch",
-    "test": "mocha --grep Aggregate"
+    "test": "mocha"
   },
   "mocha": {
     "require": "ts-node/register",
@@ -16,6 +16,9 @@
   },
   "author": "Sam Noel <noel.samuel.a@gmail.com>",
   "license": "Apache-2.0",
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
     "@turf/flatten": "^6.5.0",
     "@turf/turf": "^6.5.0",
