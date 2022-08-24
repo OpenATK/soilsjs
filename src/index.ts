@@ -1,5 +1,5 @@
 const pointer = require('json-pointer');
-const fs = require('fs');
+//const fs = require('fs');
 const wellknown = require('wellknown');
 const _ = require('lodash');
 const turf = require('@turf/turf');
@@ -11,6 +11,7 @@ const debug = require('debug');
 const info = debug('soilsjs:info');
 const trace = debug('soilsjs:trace');
 const error = debug('soilsjs:error');
+const warn = debug('soilsjs:warn');
 
 let defaultConfig = [
   'mupolygon',
@@ -59,7 +60,7 @@ async function fromCounty(state, county, {config}) {
 }
 
 // The WKT string itself won't work, it must be surrounded by single quotes, e.g., 'x'
-async function fromWkt(wkt, {config, aggregate}) {
+async function fromWkt(wkt, {config, aggregate, flatten}) {
   config = config || defaultConfig;
   let ssurgoWkt = `'${wkt}'`; // HERE IS THE MODIFICATION NECESSARY FOR THEIR API
   let QUERY = `SELECT * FROM SDA_Get_Mukey_from_intersection_with_WktWgs84(${ssurgoWkt})`;
@@ -127,10 +128,14 @@ async function fromWkt(wkt, {config, aggregate}) {
     let agg = await _aggregate(obj, wkt)
     _.merge(obj, agg);
   }
-  fs.writeFileSync(`./soil-outputs.json`, JSON.stringify(obj));
+
+  if (flatten) {
+    let ff = _flatten(obj);
+    return ff
+  }
+  //fs.writeFileSync(`./soil-outputs.json`, JSON.stringify(obj));
   return obj;
 }
-
 
 async function query(QUERY, opts?) {
   //1. Get geospatial data
@@ -508,10 +513,17 @@ async function aoiFromDem(demfile) {
 
 export function _aggregate(soils, wkt) {
   let aoi = wellknown.parse(wkt);
-  info(`Retreiving SSURGO soil data for the AOI`);
   //1. Get bbox of AOI
-  let poly = turf.polygon(aoi.coordinates);
-  let totalArea = turf.area(poly);;
+  let poly;
+  let totalArea;
+  let isPoint = false;
+  if (wkt.includes("POLYGON")) {
+    poly = turf.polygon(aoi.coordinates);
+    totalArea = turf.area(poly);;
+  } else if (wkt.includes("POINT")) {
+    poly = turf.point(aoi.coordinates);
+    isPoint = true;
+  }
 
   let out : any = {
     mapunit: {},
@@ -523,7 +535,10 @@ export function _aggregate(soils, wkt) {
     let { mupolygongeo, mukey, mupolygonkey } = mup;
     let geojson = wellknown.parse(mupolygongeo);
     let polygon = turf.polygon(geojson.coordinates);
-    let geom = turf.intersect(polygon, poly)
+    let geom;
+    if (poly) {
+      geom = isPoint ? polygon : turf.intersect(polygon, poly);
+    }
 
     if (geom) {
       let area = turf.area(geom);
@@ -604,6 +619,11 @@ export function _aggregate(soils, wkt) {
         // All aggregations will be based weighted based on representative 
         // horizon thickness value
         let weight = parseFloat(horizon.hzthk_r);
+        if (!weight) { //TODO: handle case where neither exist??
+          let top = parseFloat(horizon.hzdept_r);
+          let bot = parseFloat(horizon.hzdepb_r);
+          weight = bot-top;
+        }
         out.component[cokey].aggregate.chorizon.hzthk_r.sum += weight;
 
         // Aggregate horizon data up to component;
@@ -746,9 +766,291 @@ let tableTree = {
   MUPOLYGON: {},
 }
 
+export function arbitraryLayering(horizons, layerDefinitions) {
+  //0. Ensure horizons and layers are in order
+
+  let hzons = _.orderBy(horizons, 'hzdept_r');
+  let layers = _.orderBy(layerDefinitions, 'hzdept_r');
+
+  if (hzons.some((h) => !Number.isInteger(h.hzdept_r)) || hzons.some((h) => !Number.isInteger(h.hzdepb_r))) {
+    let bads = hzons.filter((h) => !Number.isInteger(h.hzdept_r) || !Number.isInteger(h.hzdepb_r));
+    warn(`Non-integer values of hzdept_r or hzdepb_r detected in input horizons: ${bads}`)
+  }
+
+  if (layers.some((h) => !Number.isInteger(h.hzdept_r)) || layers.some((h) => !Number.isInteger(h.hzdepb_r))) {
+    let bads = layers.filter((h) => !Number.isInteger(h.hzdept_r) || !Number.isInteger(h.hzdepb_r));
+    warn(`Non-integer values of hzdept_r or hzdepb_r detected in input layer definitions: ${bads}`)
+  }
+  //1. loop over the desired horizon definitions
+  //2. loop over each soil and determine which are relevant
+  //2a. Edge cases include soil layers that extend beyond the input soil depth
+
+  //Simple concept: every layer is some combination of horizons
+  layers.map((l) => {
+    let collection: Array<{weight: number, horizon: object}> = [];
+    let done = false;
+    let thickness = l.hzdept_r - l.hzdepb_r;
+    hzons.forEach((h) => {
+
+      //Top Case 1) Top begins in this horizon
+      //Top Case 2) Layer continues down through this horizon
+      if (withinHorizon(l.hzdept_r, h) || !done) {
+        // Compute weight handling cases 1 and 2.
+        let deepest = Math.max(l.hzdept_r, h.hzdept_r);
+
+        if (withinHorizon(l.hzdepb_r, h)) {
+          // Bottom Case 1: Layer ends in this horizon:
+          collection.push({
+            weight: (deepest - l.hzdepb_r)/(thickness),
+            horizon: h
+          });
+          done = true;
+        } else if (l.hzdepb_r > h.hzdepb_r) {
+          // Bottom Case 2: Layer continues beyond this horizon: add the weight to the collection
+          collection.push({
+            weight: (deepest - h.hzdepb_r)/(thickness),
+            horizon: h
+          })
+        }
+      } else {
+        //Move on looking for the layer containing the start
+      }
+    })
+    // Now handle the aggregation
+    return aggregateHorizons(collection);
+  })
+}
+
+function withinHorizon(val, h) {
+  return val >= h.hzdept_r && val < h.hzdepb_r;
+}
+
+function aggregateHorizons(horizons) {
+  let aggregation = {};
+  horizons.forEach(({horizon, weight}) => {
+    // Aggregate horizon data up to component;
+    let horizonKeys = Object.keys(horizon)
+      .filter(key => !key.includes("key"))
+      .filter(key => parseFloat(horizon[key]))
+    horizonKeys.forEach((key) => {
+      // Computed Weighted values for component
+      aggregation[key] = aggregation[key] || {
+        weightedSum: 0,
+        sumWeight: 0
+      };
+      aggregation[key].weightedSum += weight*parseFloat(horizon[key]);
+      aggregation[key].sumWeight += weight;
+      aggregation[key].value = aggregation[key].weightedSum/aggregation[key].sumWeight;
+    })
+  })
+  return aggregation;
+}
+
+
+function _flatten(soils) {
+  return Object.keys(soils.mapunit).map(mukey => {
+    let flat = _flattenObj(soils.mapunit[mukey]);
+    return flat
+    /*
+    return Object.keys(soils.mapunit[mukey].component).map(cokey => {
+      return Object.keys(soils.component[cokey].chorizon).map(chkey => {
+        let rowdata = Object.assign({}, soils.mapunit[mukey])
+        Object.assign({}, soils.mapunit[mukey])
+        return {
+
+        }
+      })
+    })
+    */
+  })
+}
+
+function _flattenObj(obj) {
+  let omits = ["component", "mapunit", "chorizon", "mupolygon", "aggregate", "area"];
+
+  let entries = Object.keys(obj)
+    .filter(key => obj[key] !== null)
+    .filter(key => !omits.includes(key))
+    .filter(key => !(key.includes("_l") || key.includes("_h")))
+    .map(key => key.replace("_r", ""))
+    .filter(key => key in humanReadable)
+    .map(key => [humanReadable[key], obj[key] || obj[key+"_r"]])
+
+  let otherEntries = Object.keys(obj.aggregate)
+    .map(key => _flattenAggregate(obj.aggregate[key]))
+    .flat(1)
+
+  let out = Object.fromEntries(entries)
+  Object.assign(out, Object.fromEntries(otherEntries))
+  return out;
+}
+
+function _flattenAggregate(obj) {
+  let ent = Object.keys(obj)
+    .filter(key => obj[key] !== null)
+    .filter(key => !(key.includes("_l") || key.includes("_h")))
+    .map(key => key.replace("_r", ""))
+    .filter(key => key in humanReadable)
+    .map(key => [humanReadable[key], (obj[key] || obj[key+"_r"]).value])
+    return ent
+}
+
+export let humanReadable = {
+  //Map Unit
+  "farmlndcl": "Farmland Classification",
+  'musym': "Map Unit Symbol",
+  'muname': "Map Unit Name",
+  'mukind': "Map Unit Type",
+  'mustatus': "Map Unit Status",
+  'muacres': "Map Unit Acres",
+  'mapunitlfw': "Map Unit Linear Feature Width (m)",
+  'mapunitpfa': "Map Unit Point Feature Area (ha)",
+  'muhelcl': "Map Unit Highly Erodible Land Classification",
+  'muwathelcl': "Map Unit Highly Erodible Land Classification - Water",
+  'muwndhelcl': "Map Unit Highly Erodible Land Classification - Wind",
+  'interpfocus': "Interpretive Focus of Landuse",
+  'invesintens': "Intensity of Field Observation",
+  'iacornsr': "Iowa Corn Suitability Rating",
+  'nhiforsoigrp': "NH Forest Soil Group",
+  'nhspiagr': "NH Soil Potential Index for Agriculture",
+  'vtsepticsyscl': "Vermont Septic System Classification",
+  'mucertstat': "Map Unit Certification Status",
+  'lkey': "Legend Key",
+  'museq': "Map Unit Sequence",
+  'nationalmusym': "National Map Unit Symbol",
+
+  //Component
+  "comppct": "Component Percentage (%)",
+  "slope": "Slope (%)",
+  "slopelenusle_r": "USLE Slope Length ()",
+  "tfact": "Soil Loss Tolerance Factor (t/ac)",
+  "wei": "Soil Loss Factor - Wind (t/ac)",
+  "weg": "Wind Erosion Classification",
+  "elev": "Elevation (m)",
+  "aspectccwise": "Slope Aspect - counterclockwise (degrees)",
+  "aspectcwise": "Slope Aspect - clockwise (degrees)",
+  "aspectrep": "Slope Aspect (degrees)",
+  "albedodry": "Albedo",
+  "airtempa_l": "Average Air Temperature - Min (C)",
+  "airtempa_r": "Average Air Temperature - Average (C)",
+  "airtempa_h": "Average Air Temperature - Max (C)",
+  "map": "Average Anual Precipitation (mm)",
+  "ffd": "First Freeze Days - from last freeze",
+  "compname": "Component Name",
+  "compkind": "Component Type",
+  "majcompflag": "Is Major Component",
+  "otherph": "Other Phase Criterion",
+  "localphase": "Local Phase Criterion",
+  "runoff": "Runoff Potential Classification",
+  "erocl": "Erosion Classification",
+  "earthcovkind1": "Earth Cover Type 1",
+  "earthcovkind2": "Earth Cover Type 2",
+  "hydricon": "Natural Hydric Condition",
+  "hydricrating": "Is Hydric",
+  "drainagecl": "Natural Drainage Class",
+  "geomdesc": "Geomorphic Description",
+  "reannualprecip": "Average Annual Precipitation - Plant Available (mm)",
+  "nirrcapcl": "Capability Class 1 - non-irrigated",
+  "nirrcapscl": "Capability Class 2 - non-irrigated",
+  "nirrcapunit": "Capability Class 3 - non-irrigated",
+  "irrcapcl": "Capability Class 1 - irrigated",
+  "irrcapscl": "Capability Class 2 - irrigated",
+  "irrcapunit": "Capability Class 3 - irrigated",
+  "cropprodindex": "Crop Productivity Index",
+  "constreeshrubgrp": "Conservatio nTree Shrub Group",
+  "wndbrksuitgrp": "Wind Break Suitability Group",
+  "rsprod": "Range Forage Productivity (lb/ac/yr)",
+  "foragesuitgrpid": "Forage Suitability Group",
+  "wlgrain": "Grain Habitat Suitability",
+  "wlgrass": "Grass Habitat Suitability",
+  "wlherbaceous": "Herbaceous Plant Habitat Suitability",
+  "wlshrub": "Shrub Habitat Suitability",
+  "wlconiferous": "Coniferous Tree Habitat Suitability",
+  "wlhardwood": "Hardwood Tree Habitat Suitability",
+  "wlwetplant": "Wetland Plant Habitat Suitability",
+  "wlshallowwat": "Shallow Wetland Plant Habitat Suitability",
+  "wlrangeland": "Rangeland Wildlife Suitability",
+  "wlopenland": "Openland Wildlife Suitability",
+  "wlwoodland": "Woodland Wildlife Suitability",
+  "wlwetland": "Wetland Wildlife Suitability",
+  "soilslippot": "Soil Slip Potential",
+  "frostact": "Frost Heaving Susceptability",
+  "initsub": "Subsidence After Drainage - 3 Years (cm)",
+  "totalsub": "Subsidence - Total (cm)",
+  "hydgrp": "Hydrologic Soil Group",
+  "corcon": "Concrete Corrosion Susceptability",
+  "corsteel": "Steel Corrosion Susceptability",
+  "taxclname": "Taxonomic Class",
+  "taxorder": "Taxonomic Order",
+  "taxsuborder": "Taxonomic Suborder",
+  "taxgrtgroup": "Taxonomic Great Group",
+  "taxsubgrp": "Taxonomic Subgroup",
+  "taxpartsize": "Taxonomic Particle Size Class",
+  "taxpartsizemod": "Modified Taxonomic Particle Size Class",
+  "taxceactcl": "Taxonomic Cation Exchange Activity Class",
+  "taxreaction": "Taxonomic Reaction Class",
+  "taxtempcl": "Taxonomic Temperature Regime",
+  "taxmoistscl": "Taxonomic Moisture Regime",
+  "taxtempregime": "Taxonomic Temperature Regime",
+  "soiltaxedition": "Soil Taxonomic Edition",
+  "castorieindex": "California Storie Index",
+  "flecolcomnum": "Florida Ecological Community Number",
+  "flhe": "Is Florida Highly Erodible",
+  "flphe": "Is Florida High Erosion Potential",
+  "flsoilleachpot": "Florida Soil Leach Potential",
+  "flsoirunoffpot": "Florida Soil Runoff Potential",
+  "fltemik2use": "Florida Temik Usability",
+  "fltriumph2use": "Florida Triumph Usability",
+  "indraingrp": "Indiana Drainage Group",
+  "innitrateleachi": "Indiana Nitrate Leach Index",
+  "misoimgmtgrp": "Michigan Soil Management Group",
+  "vasoimgtgrp": "Virginia Soil Management Group",
+  "mukey": "Map Unit Key",
+  "cokey": "Component Key",
+
+  //Horizon
+  "hzthk": "Horizon Thickness (cm)",
+  "desgnvert": "Vertical Subdivision Designation",
+  "hzdepb": "Horizon Depth - Bottom (cm)",
+  "hzdept": "Horizon Depth - Top (cm)",
+  "fraggt10": "Weight of Rock Fragments - Greater than 10 in (%)",
+  "fraggt3to10": "Weight of Rock Fragments - Between 3 and 10 in (%)",
+  "sieveno4": "Sieve No.4 (%)",
+  "sieveno10": "Sieve No.10 (%)",
+  "sieveno40": "Sieve No.40 (%)",
+  "sieveno200": "Sieve No.200 (%)",
+  "sandtotal": "Sand - Total (%)",
+  "sandco": "Sand - Coarse (%)",
+  "sandmed": "Sand - Medium (%)",
+  "sandfine": "Sand - Fine (%)",
+  "sandvf": "Sand - Very Fine (%)",
+  "sandvc": "Sand - Very Coarse (%)",
+  "silttotal": "Silt - Total (%)",
+  "claytotal": "Clay - Total (%)",
+  "om_l": "Organic Matter",
+  "dbthirdbar": "Permanent Wilting Point",
+  "dbovendry": "Oven Dry Weight ()",
+  "ksat": "Saturated Hydraulic Conductivity (um/s)",
+  "awc": "Available Water Content (%)",
+  "wthirdbar": "Field Capacity Water Content (%)",
+  "wfifteenbar": "Permanent Wilting Point Water Content (%)",
+  "wsatiated": "Satiated Water Content (%)",
+  "lep": "Linear Expression of Functional Water Content (%)",
+  "pi": "Liquid Limit Minus Plastic Limit",
+  "aashind_l": "AASHTO Group Index",
+  "kwfact": "Kw Factor - Erodibility by Water",
+  "kffact": "Kf Factor - Erodibility by Water",
+  "cec7_l": "Cation Exchange Capacity-7",
+  "sumbases_l": "Sum of Extractable Bases",
+  "ph1to1h2o_l": "pH H2O",
+  "extracid_l": "Extractable Acidity",
+  "caco3_r": "Calcium Carbonate"
+}
+
 module.exports = {
   fromCounty,
   fromWkt,
   query,
-  aggregate: _aggregate
+  aggregate: _aggregate,
+  humanReadable,
 }

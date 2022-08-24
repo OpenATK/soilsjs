@@ -1,6 +1,6 @@
 {
   "name": "soilsjs",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "A node module for accessing SSURGO soils data within the US",
   "main": "dist/index.js",
   "scripts": {
@@ -20,6 +20,7 @@
     "access": "public"
   },
   "dependencies": {
+    "@turf/dissolve": "^6.5.0",
     "@turf/flatten": "^6.5.0",
     "@turf/turf": "^6.5.0",
     "axios": "^0.24.0",

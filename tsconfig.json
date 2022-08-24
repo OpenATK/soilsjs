@@ -1,6 +1,7 @@
 {
   "extends": "@tsconfig/node16",
   "compilerOptions": {
+    "target": "es2019",
     "allowJs": true,
     "removeComments": true,
     "importHelpers": true,

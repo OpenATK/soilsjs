@@ -581,7 +581,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@turf/flatten@npm:^6.5.0":
+"@turf/flatten@npm:*, @turf/flatten@npm:^6.5.0":
   version: 6.5.0
   resolution: "@turf/flatten@npm:6.5.0"
   dependencies:
@@ -3162,6 +3162,7 @@ __metadata:
   resolution: "soilsjs@workspace:."
   dependencies:
     "@tsconfig/node16": ^1.0.2
+    "@turf/dissolve": ^6.5.0
     "@turf/flatten": ^6.5.0
     "@turf/turf": ^6.5.0
     "@types/bluebird-global": ^3.5.13
