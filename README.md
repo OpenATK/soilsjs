@@ -17,7 +17,7 @@ const soilsjs = require('soilsjs')
 ```
 
 ### fromWkt(wkt)
-Return the primary soil data tables for an input geometry in Well Known Text (WKT) format. Refer to other packages for translation from geojson or other formats into WKT.
+Return the primary soil data tables for input geometry in Well Known Text (WKT) format.
 ```
 let wktStr = 'POLYGON ((-86.97704315185547 40.4821767494622, -86.97715044021605 40.48469011732992, -86.98195695877075 40.48469011732992, -86.98187112808228 40.4822093912065, -86.97704315185547 40.4821767494622))';
 let soils = await soilsjs.fromWkt(wktStr);
